@@ -49,28 +49,35 @@ public struct FaceLivenessDetectorView: View {
             return session
         }
 
-        let faceDetector = try! FaceDetectorShortRange.Model()
-        let faceInOvalStateMatching = FaceInOvalMatching(
-            instructor: Instructor()
-        )
-
-        let videoChunker = VideoChunker(
-            assetWriter: LivenessAVAssetWriter(),
-            assetWriterDelegate: VideoChunker.AssetWriterDelegate(),
-            assetWriterInput: LivenessAVAssetWriterInput()
-        )
-
+        // The detector and the chunker are built inside the `StateObject` argument, which is an
+        // autoclosure: SwiftUI runs it once, when the view first gets its place in the tree.
+        // Built before it, they were made again on every initialization of this struct, that is
+        // on every update of the parent, and loading the Core ML network and the asset writer
+        // input blocked the main thread each time (Frienda FRD-4429).
         self._viewModel = StateObject(
             wrappedValue: .init(
-                faceDetector: faceDetector,
-                faceInOvalMatching: faceInOvalStateMatching,
-                videoChunker: videoChunker,
+                faceDetector: try! FaceDetectorShortRange.Model(),
+                faceInOvalMatching: FaceInOvalMatching(
+                    instructor: Instructor()
+                ),
+                videoChunker: VideoChunker(
+                    assetWriter: LivenessAVAssetWriter(),
+                    assetWriterDelegate: VideoChunker.AssetWriterDelegate(),
+                    assetWriterInput: LivenessAVAssetWriterInput()
+                ),
                 closeButtonAction: { onCompletion(.failure(.userCancelled)) },
                 sessionID: sessionID,
                 isPreviewScreenEnabled: !disableStartView,
                 challengeOptions: challengeOptions
             )
         )
+    }
+
+    /// Loads the face detection network on a background queue. Call it on the screen before
+    /// liveness: the first `FaceLivenessDetectorView` then takes the loaded network instead of
+    /// loading it on the main thread.
+    public static func prewarm() {
+        FaceDetectorShortRange.Model.prewarm()
     }
     
     init(
