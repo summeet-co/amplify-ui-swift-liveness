@@ -71,12 +71,30 @@ class LivenessCaptureSession {
         }
     }
 
+    /// Stops the session on `configurationQueue`, the queue `startSession()` starts it on.
+    /// `stopRunning()` and removing inputs commit the configuration synchronously, and called on
+    /// the main thread they held it for up to 10 s (Frienda FRD-4429). One serial queue for both
+    /// also keeps the order: a stop that comes while the start is still queued runs after it,
+    /// instead of finding the session not yet running and leaving it to start with no owner.
     func stopRunning() {
         guard let session = captureSession else { return }
-        defer {
-            captureSession = nil
+        captureSession = nil
+        configurationQueue.async {
+            Self.tearDown(session)
         }
+    }
 
+    /// Before a new session is configured for the same camera: the old one is gone when this
+    /// returns, because the new one adds its input on the calling thread right after.
+    private func teardownExistingSession(input: AVCaptureDeviceInput) {
+        guard let session = captureSession else { return }
+        captureSession = nil
+        configurationQueue.sync {
+            Self.tearDown(session)
+        }
+    }
+
+    private static func tearDown(_ session: AVCaptureSession) {
         if session.isRunning {
             session.stopRunning()
         }
@@ -84,15 +102,10 @@ class LivenessCaptureSession {
         for input in session.inputs {
             session.removeInput(input)
         }
-        
+
         for output in session.outputs {
             session.removeOutput(output)
         }
-    }
-
-    private func teardownExistingSession(input: AVCaptureDeviceInput) {
-        stopRunning()
-        captureSession?.removeInput(input)
     }
 
     private func setupInput(

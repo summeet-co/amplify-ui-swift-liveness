@@ -27,11 +27,37 @@ extension FaceDetectorShortRange {
         }
 
         convenience init() throws {
-            try self.init(
-                face_detection_short_range(
-                    configuration: .init()
-                ).model
-            )
+            try self.init(Self.sharedNetwork())
+        }
+
+        /// The Core ML network, loaded once per process. Loading it compiles the network for the
+        /// device on the first run after an install, which took seconds on older iPhones; done
+        /// from a view's initializer, that ran on the main thread every time the view was made
+        /// (Frienda FRD-4429). A `Model` instance stays per session because it holds that
+        /// session's handlers; the network under it carries no session state.
+        private static let networkLock = NSLock()
+        private static var network: MLModel?
+
+        static func sharedNetwork() throws -> MLModel {
+            networkLock.lock()
+            let cached = network
+            networkLock.unlock()
+            if let cached { return cached }
+
+            // Loaded outside the lock, so a reader never waits behind a load. Two loads racing
+            // keep the first result; the second is only wasted work.
+            let loaded = try face_detection_short_range(configuration: .init()).model
+            networkLock.lock()
+            defer { networkLock.unlock() }
+            if network == nil { network = loaded }
+            return network ?? loaded
+        }
+
+        /// Loads the network on a background queue, so the first liveness screen finds it ready.
+        static func prewarm() {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = try? sharedNetwork()
+            }
         }
 
         weak var faceDetectionSessionConfiguration: FaceDetectionSessionConfigurationWrapper?
